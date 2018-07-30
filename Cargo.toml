@@ -1,0 +1,14 @@
+cargo-features = ["edition"]
+
+[package]
+name = "eq"
+version = "0.1.0"
+authors = ["Joe Einertson <jeinerts@umm>"]
+edition = '2018'
+
+[dependencies]
+edn = { git = "https://github.com/utkarshkukreti/edn.rs", "rev" = "eaeaab8fbadaa0e39ce8e73f7ccc18e61f898e50" }
+nom = "4.0.0"
+clap = "2.23.0"
+serde_json = "1.0"
+colored = "1.6"
