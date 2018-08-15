@@ -1,8 +1,10 @@
+use colored::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
 use clap::{_clap_count_exprs, arg_enum};
-use edn::Value;
+use edn::Value as EdnValue;
+use serde_json::Value as JsonValue;
 
 arg_enum! {
     pub enum OutputFormat {
@@ -29,43 +31,81 @@ crate struct OutputOptions {
     crate destination: OutputDestination,
 }
 
+crate struct ColorTheme {
+    nil: Color,
+    boolean: Color,
+    keyword: Color,
+    char: Color,
+    string: Color,
+    number: Color,
+    tag: Color,
+    symbol: Color,
+    vector: Color,
+    list: Color,
+}
+
+static DEFAULT_THEME: ColorTheme = ColorTheme {
+    nil: Color::BrightBlue,
+    symbol: Color::Cyan,
+    boolean: Color::Magenta,
+    char: Color::BrightRed,
+    string: Color::Yellow,
+    number: Color::Green,
+    keyword: Color::Red,
+    tag: Color::BrightGreen,
+    vector: Color::BrightYellow,
+    list: Color::BrightYellow,
+};
+
 trait EdnFormatter {
     fn write_nil<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b"nil")
+        write!(writer, "{}", "nil".color(DEFAULT_THEME.nil))
     }
 
     fn write_boolean<W: io::Write>(&mut self, writer: &mut W, value: bool) -> io::Result<()> {
-        writer.write_all(if value { b"true" } else { b"false" })
+        let as_str = if value { "true" } else { "false" };
+        write!(writer, "{}", as_str.color(DEFAULT_THEME.boolean))
     }
 
     fn write_char<W: io::Write>(&mut self, writer: &mut W, value: char) -> io::Result<()> {
-        writer.write_all(value.encode_utf8(&mut [0; 4]).as_ref())
+        try!(write!(writer, "{}", "\\".color(DEFAULT_THEME.char)));
+        try!(write!(
+            writer,
+            "{}",
+            value.encode_utf8(&mut [0; 4]).color(DEFAULT_THEME.char)
+        ));
+        Ok(())
     }
 
     fn write_symbol<W: io::Write>(&mut self, writer: &mut W, value: String) -> io::Result<()> {
-        writer.write_all(value.as_ref())
+        write!(writer, "{}", value.color(DEFAULT_THEME.symbol))
     }
 
     fn write_float<W: io::Write>(&mut self, writer: &mut W, value: f64) -> io::Result<()> {
-        writer.write_all(format!("{}", value).as_ref())
+        write!(writer, "{}", value.to_string().color(DEFAULT_THEME.number))
     }
 
     fn write_integer<W: io::Write>(&mut self, writer: &mut W, value: i64) -> io::Result<()> {
-        writer.write_all(format!("{}", value).as_ref())
+        write!(writer, "{}", value.to_string().color(DEFAULT_THEME.number))
     }
 
     fn write_string<W: io::Write>(&mut self, writer: &mut W, value: String) -> io::Result<()> {
         try!(self.begin_string(writer));
-        try!(writer.write_all(value.as_ref()));
+        try!(write!(writer, "{}", value.color(DEFAULT_THEME.string)));
         self.end_string(writer)
     }
 
     fn write_keyword<W: io::Write>(&mut self, writer: &mut W, value: String) -> io::Result<()> {
-        try!(writer.write_all(b":"));
-        writer.write_all(value.as_ref())
+        try!(write!(writer, "{}", ":".color(DEFAULT_THEME.keyword)));
+        try!(write!(writer, "{}", value.color(DEFAULT_THEME.keyword)));
+        Ok(())
     }
 
-    fn write_vector<W: io::Write>(&mut self, writer: &mut W, value: Vec<Value>) -> io::Result<()> {
+    fn write_vector<W: io::Write>(
+        &mut self,
+        writer: &mut W,
+        value: Vec<EdnValue>,
+    ) -> io::Result<()> {
         try!(self.begin_vector(writer));
 
         for (idx, item) in value.into_iter().enumerate() {
@@ -78,7 +118,7 @@ trait EdnFormatter {
         Ok(())
     }
 
-    fn write_list<W: io::Write>(&mut self, writer: &mut W, value: Vec<Value>) -> io::Result<()> {
+    fn write_list<W: io::Write>(&mut self, writer: &mut W, value: Vec<EdnValue>) -> io::Result<()> {
         try!(self.begin_list(writer));
 
         for (idx, item) in value.into_iter().enumerate() {
@@ -92,11 +132,11 @@ trait EdnFormatter {
     }
 
     fn begin_vector<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b"[")
+        write!(writer, "{}", "[".color(DEFAULT_THEME.vector))
     }
 
     fn end_vector<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b"]")
+        write!(writer, "{}", "]".color(DEFAULT_THEME.vector))
     }
 
     fn begin_vector_item<W: io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
@@ -111,11 +151,11 @@ trait EdnFormatter {
     }
 
     fn begin_list<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b"(")
+        write!(writer, "{}", "(".color(DEFAULT_THEME.list))
     }
 
     fn end_list<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b")")
+        write!(writer, "{}", ")".color(DEFAULT_THEME.list))
     }
 
     fn begin_list_item<W: io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
@@ -168,7 +208,7 @@ trait EdnFormatter {
     fn write_map<W: io::Write>(
         &mut self,
         writer: &mut W,
-        value: BTreeMap<Value, Value>,
+        value: BTreeMap<EdnValue, EdnValue>,
     ) -> io::Result<()> {
         try!(self.begin_map(writer));
         for (idx, (k, v)) in value.into_iter().enumerate() {
@@ -208,7 +248,7 @@ trait EdnFormatter {
     fn write_set<W: io::Write>(
         &mut self,
         writer: &mut W,
-        value: BTreeSet<Value>,
+        value: BTreeSet<EdnValue>,
     ) -> io::Result<()> {
         try!(self.begin_set(writer));
         for (idx, item) in value.into_iter().enumerate() {
@@ -224,32 +264,42 @@ trait EdnFormatter {
         &mut self,
         writer: &mut W,
         x: String,
-        y: Box<Value>,
+        y: Box<EdnValue>,
     ) -> io::Result<()> {
-        try!(writer.write_all(b"#"));
-        try!(writer.write_all(x.as_ref()));
-        try!(writer.write_all(b" "));
+        try!(write!(writer, "{}", "#".color(DEFAULT_THEME.tag)));
+        try!(write!(writer, "{}", x.color(DEFAULT_THEME.tag)));
+        try!(write!(writer, "{}", " ".color(DEFAULT_THEME.tag)));
         try!(self.write_form(writer, *y));
 
         Ok(())
     }
 
-    fn write_form<W: io::Write>(&mut self, writer: &mut W, form: Value) -> io::Result<()> {
+    fn write_form<W: io::Write>(&mut self, writer: &mut W, form: EdnValue) -> io::Result<()> {
         match form {
-            Value::Nil => self.write_nil(writer),
-            Value::Boolean(b) => self.write_boolean(writer, b),
-            Value::String(s) => self.write_string(writer, s),
-            Value::Char(c) => self.write_char(writer, c),
-            Value::Symbol(s) => self.write_symbol(writer, s),
-            Value::Keyword(k) => self.write_keyword(writer, k),
-            Value::Integer(i) => self.write_integer(writer, i),
-            Value::Float(f) => self.write_float(writer, f.into()),
-            Value::List(l) => self.write_list(writer, l),
-            Value::Vector(v) => self.write_vector(writer, v),
-            Value::Map(m) => self.write_map(writer, m),
-            Value::Set(s) => self.write_set(writer, s),
-            Value::Tagged(x, y) => self.write_tagged(writer, x, y),
+            EdnValue::Nil => self.write_nil(writer),
+            EdnValue::Boolean(b) => self.write_boolean(writer, b),
+            EdnValue::String(s) => self.write_string(writer, s),
+            EdnValue::Char(c) => self.write_char(writer, c),
+            EdnValue::Symbol(s) => self.write_symbol(writer, s),
+            EdnValue::Keyword(k) => self.write_keyword(writer, k),
+            EdnValue::Integer(i) => self.write_integer(writer, i),
+            EdnValue::Float(f) => self.write_float(writer, f.into()),
+            EdnValue::List(l) => self.write_list(writer, l),
+            EdnValue::Vector(v) => self.write_vector(writer, v),
+            EdnValue::Map(m) => self.write_map(writer, m),
+            EdnValue::Set(s) => self.write_set(writer, s),
+            EdnValue::Tagged(x, y) => self.write_tagged(writer, x, y),
         }
+    }
+}
+
+trait JsonFormatter {
+    fn write_null<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        write!(writer, "{}", "nil".color(DEFAULT_THEME.nil))
+    }
+
+    fn write_undefined<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        write!(writer, "{}", "nil".color(DEFAULT_THEME.nil))
     }
 }
 
@@ -350,100 +400,7 @@ impl EdnFormatter for PrettyEdnFormatter {
     }
 }
 
-#[cfg(test)]
-mod format_tests {
-    use super::*;
-    use std::collections::BTreeSet;
-    use std::iter::FromIterator;
-
-    #[test]
-    fn test_nil() {
-        assert_eq!(format_form(Value::Nil), "nil");
-    }
-
-    #[test]
-    fn test_bool() {
-        assert_eq!(format_form(Value::Boolean(true)), "true");
-        assert_eq!(format_form(Value::Boolean(false)), "false");
-    }
-
-    #[test]
-    fn test_string() {
-        assert_eq!(
-            format_form(Value::String("I'm Joe".to_owned())),
-            "\"I'm Joe\""
-        );
-        assert_eq!(
-            format_form(Value::String("hello world".to_owned())),
-            "\"hello world\""
-        );
-    }
-
-    #[test]
-    fn test_char() {
-        assert_eq!(format_form(Value::Char('c')), "\\c");
-        assert_eq!(format_form(Value::Char('\\')), "\\\\");
-    }
-
-    #[test]
-    fn test_list() {
-        assert_eq!(
-            format_form(Value::List(vec![
-                Value::Integer(2),
-                Value::String("hello there".to_owned()),
-                Value::Keyword("ayo".to_owned()),
-            ])),
-            "(2 \"hello there\" :ayo)"
-        );
-        assert_eq!(
-            format_form(Value::List(vec![
-                Value::Symbol("defn".to_owned()),
-                Value::Symbol("square".to_owned()),
-                Value::Vector(vec![Value::Symbol("x".to_owned())]),
-                Value::List(vec![
-                    Value::Symbol("*".to_owned()),
-                    Value::Symbol("x".to_owned()),
-                    Value::Symbol("x".to_owned()),
-                ]),
-            ])),
-            "(defn square [x] (* x x))"
-        );
-    }
-
-    #[test]
-    fn test_vector() {
-        assert_eq!(
-            format_form(Value::Vector(vec![
-                Value::Integer(2),
-                Value::String("hello there".to_owned()),
-                Value::Keyword("ayo".to_owned()),
-            ])),
-            "[2 \"hello there\" :ayo]"
-        );
-        assert_eq!(
-            format_form(Value::Vector(vec![
-                Value::Symbol("hi".to_owned()),
-                Value::Vector(vec![Value::Char('k'), Value::Nil, Value::Vector(vec![])]),
-            ])),
-            "[hi [\\k nil []]]"
-        );
-    }
-
-    #[test]
-    fn test_set() {
-        assert_eq!(format_form(Value::Set(BTreeSet::from_iter(vec![]))), "#{}");
-        assert_eq!(
-            format_form(Value::Set(BTreeSet::from_iter(vec![Value::Integer(2)]))),
-            "#{2}"
-        );
-        assert_eq!(
-            format_form(Value::Set(BTreeSet::from_iter(vec![Value::Boolean(true)]))),
-            "#{true}"
-        );
-    }
-}
-
-crate fn format_output(forms: Vec<Value>, opts: &OutputOptions) -> io::Result<()> {
+crate fn format_output(forms: Vec<EdnValue>, opts: &OutputOptions) -> io::Result<()> {
     let mut writer = match &opts.destination {
         OutputDestination::Stdout => io::stdout(),
         OutputDestination::File(_path) => io::stdout(),
@@ -467,4 +424,108 @@ crate fn format_output(forms: Vec<Value>, opts: &OutputOptions) -> io::Result<()
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use std::iter::FromIterator;
+
+    #[test]
+    fn test_nil() {
+        assert_eq!(format_form(EdnValue::Nil), "nil");
+    }
+
+    #[test]
+    fn test_bool() {
+        assert_eq!(format_form(EdnValue::Boolean(true)), "true");
+        assert_eq!(format_form(EdnValue::Boolean(false)), "false");
+    }
+
+    #[test]
+    fn test_string() {
+        assert_eq!(
+            format_form(EdnValue::String("I'm Joe".to_owned())),
+            "\"I'm Joe\""
+        );
+        assert_eq!(
+            format_form(EdnValue::String("hello world".to_owned())),
+            "\"hello world\""
+        );
+    }
+
+    #[test]
+    fn test_char() {
+        assert_eq!(format_form(EdnValue::Char('c')), "\\c");
+        assert_eq!(format_form(EdnValue::Char('\\')), "\\\\");
+    }
+
+    #[test]
+    fn test_list() {
+        assert_eq!(
+            format_form(EdnValue::List(vec![
+                EdnValue::Integer(2),
+                EdnValue::String("hello there".to_owned()),
+                EdnValue::Keyword("ayo".to_owned()),
+            ])),
+            "(2 \"hello there\" :ayo)"
+        );
+        assert_eq!(
+            format_form(EdnValue::List(vec![
+                EdnValue::Symbol("defn".to_owned()),
+                EdnValue::Symbol("square".to_owned()),
+                EdnValue::Vector(vec![EdnValue::Symbol("x".to_owned())]),
+                EdnValue::List(vec![
+                    EdnValue::Symbol("*".to_owned()),
+                    EdnValue::Symbol("x".to_owned()),
+                    EdnValue::Symbol("x".to_owned()),
+                ]),
+            ])),
+            "(defn square [x] (* x x))"
+        );
+    }
+
+    #[test]
+    fn test_vector() {
+        assert_eq!(
+            format_form(EdnValue::Vector(vec![
+                EdnValue::Integer(2),
+                EdnValue::String("hello there".to_owned()),
+                EdnValue::Keyword("ayo".to_owned()),
+            ])),
+            "[2 \"hello there\" :ayo]"
+        );
+        assert_eq!(
+            format_form(EdnValue::Vector(vec![
+                EdnValue::Symbol("hi".to_owned()),
+                EdnValue::Vector(vec![
+                    EdnValue::Char('k'),
+                    EdnValue::Nil,
+                    EdnValue::Vector(vec![]),
+                ]),
+            ])),
+            "[hi [\\k nil []]]"
+        );
+    }
+
+    #[test]
+    fn test_set() {
+        assert_eq!(
+            format_form(EdnValue::Set(BTreeSet::from_iter(vec![]))),
+            "#{}"
+        );
+        assert_eq!(
+            format_form(EdnValue::Set(BTreeSet::from_iter(vec![EdnValue::Integer(
+                2,
+            )]))),
+            "#{2}"
+        );
+        assert_eq!(
+            format_form(EdnValue::Set(BTreeSet::from_iter(vec![EdnValue::Boolean(
+                true,
+            )]))),
+            "#{true}"
+        );
+    }
 }

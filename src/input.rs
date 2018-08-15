@@ -10,7 +10,7 @@ use serde_json::Value as JsonValue;
 #[derive(Debug)]
 crate enum ReadError {
     IOError,
-    ParseError,
+    ParseError(String),
 }
 
 arg_enum!{
@@ -27,7 +27,6 @@ crate struct InputOptions {
 }
 
 fn json_to_edn(json: JsonValue) -> EdnValue {
-    println!("json: {:?}", json);
     match json {
         JsonValue::Null => EdnValue::Nil,
         JsonValue::Bool(b) => EdnValue::Boolean(b),
@@ -70,7 +69,12 @@ fn parse_json(contents: &str) -> Result<Vec<EdnValue>, ReadError> {
 
     match parsed {
         Ok(json) => forms.push(json_to_edn(json)),
-        Err(_) => return Err(ReadError::ParseError),
+        Err(e) => {
+            return Err(ReadError::ParseError(format!(
+                "Failed to parse JSON: {}",
+                e
+            )))
+        }
     }
 
     Ok(forms)
@@ -83,7 +87,7 @@ fn parse_edn(contents: &str) -> Result<Vec<EdnValue>, ReadError> {
     while let Some(form) = parser.read() {
         match form {
             Ok(f) => forms.push(f),
-            Err(_) => return Err(ReadError::ParseError),
+            Err(_) => return Err(ReadError::ParseError("Failed to parse EDN".into())),
         }
     }
 

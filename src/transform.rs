@@ -36,7 +36,6 @@ crate struct IdentityOperation {}
 
 impl Operation for IdentityOperation {
     fn execute(&self, input: Value) -> OperationResult {
-        println!("Transform 'identity': {:?}", input);
         Ok(input)
     }
 }
@@ -45,7 +44,6 @@ crate struct KeysOperation {}
 
 impl Operation for KeysOperation {
     fn execute(&self, input: Value) -> OperationResult {
-        println!("Transform 'keys': {:?}", input);
         match input {
             Value::Map(m) => Ok(Value::Vector(m.keys().cloned().collect())),
             _ => Err(OperationError(format!(
@@ -60,7 +58,6 @@ crate struct ValuesOperation {}
 
 impl Operation for ValuesOperation {
     fn execute(&self, input: Value) -> OperationResult {
-        println!("Transform 'values': {:?}", input);
         match input {
             Value::Map(m) => Ok(Value::Vector(m.values().cloned().collect())),
             _ => Err(OperationError(format!(
@@ -78,7 +75,6 @@ crate struct GetOperation {
 
 impl Operation for GetOperation {
     fn execute(&self, input: Value) -> OperationResult {
-        println!("Transform 'get': {:?}, {:?}", self.key, input);
         match input {
             Value::Map(m) => Ok(m.get(&self.key).unwrap_or(&Value::Nil).clone()),
             _ => Err(OperationError(format!(
@@ -109,7 +105,6 @@ impl MapOperation {
 
 impl Operation for MapOperation {
     fn execute(&self, input: Value) -> OperationResult {
-        println!("Transform 'map': {:?}", input);
         match input {
             Value::List(l) => self.do_map(l),
             Value::Vector(v) => self.do_map(v),

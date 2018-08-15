@@ -55,7 +55,23 @@ crate fn parse_opts() -> EqOptions {
                 .default_value("EDN")
                 .possible_values(&output::OutputFormat::variants()),
         )
+        .arg(
+            Arg::with_name("color")
+                .help("Colorize output?")
+                .short("c")
+                .long("color")
+                .takes_value(true)
+                .case_insensitive(true)
+                .default_value("default")
+                .possible_values(&["default", "always", "never"]),
+        )
         .get_matches();
+
+    match matches.value_of("color").unwrap() {
+        "always" => colored::control::set_override(true),
+        "never" => colored::control::set_override(false),
+        _ => (),
+    }
 
     EqOptions {
         input: input::InputOptions {
