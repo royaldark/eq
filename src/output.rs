@@ -362,7 +362,7 @@ trait JsonFormatter {
 #[derive(Debug)]
 crate struct PrettyEdnFormatter<W: Write> {
     current_column: usize,
-    current_indent: usize,
+    offsets: Vec<usize>,
     has_value: bool,
     writer: W,
 }
@@ -371,17 +371,21 @@ impl<W: Write> PrettyEdnFormatter<W> {
     fn new(writer: W) -> Self {
         PrettyEdnFormatter {
             current_column: 0,
-            current_indent: 0,
+            offsets: vec![],
             has_value: false,
             writer,
         }
     }
 
-    fn indent(&mut self, n: usize) -> io::Result<()> {
-        for _ in 0..n {
-            //let indent = self.indent.clone();
-            try!(write!(self, "{}", " "));
-        }
+    fn indent(&mut self) -> io::Result<()> {
+        match self.offsets.last() {
+            Some(&n) => {
+                for _ in 0..n {
+                    try!(write!(self, "{}", " "));
+                }
+            }
+            None => {}
+        };
 
         Ok(())
     }
@@ -394,7 +398,7 @@ impl<W: Write> Write for PrettyEdnFormatter<W> {
 
         for c in s.chars() {
             if c == '\n' {
-                println!("column RESET");
+                //println!("column RESET");
                 self.current_column = 0;
             } else {
                 self.current_column += 1;
@@ -420,7 +424,7 @@ impl<W: Write> Write for PrettyEdnFormatter<W> {
 impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
     fn reset(&mut self) {
         self.current_column = 0;
-        self.current_indent = 0;
+        self.offsets = vec![];
     }
 
     fn write_nil(&mut self) -> io::Result<()> {
@@ -501,22 +505,23 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
     }
 
     fn begin_vector(&mut self) -> io::Result<()> {
-        self.current_indent += 1;
+        try!(self.write_all(b"["));
+
         self.has_value = false;
-        self.write_all(b"[")
+        self.offsets.push(self.current_column);
+
+        Ok(())
     }
 
     fn end_vector(&mut self) -> io::Result<()> {
-        self.current_indent -= 1;
-
+        self.offsets.pop();
         self.write_all(b"]")
     }
 
     fn begin_vector_item(&mut self, first: bool) -> io::Result<()> {
         if !first {
-            let offset = self.current_column;
             try!(self.write_all(b"\n"));
-            try!(self.indent(offset));
+            try!(self.indent());
         }
 
         Ok(())
@@ -528,58 +533,45 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
     }
 
     fn begin_map(&mut self) -> io::Result<()> {
-        self.current_indent += 1;
+        try!(self.write_all(b"{"));
+        self.offsets.push(self.current_column);
         self.has_value = false;
-        self.write_all(b"{")
+        Ok(())
     }
 
     fn end_map(&mut self) -> io::Result<()> {
-        self.current_indent -= 1;
-
-        if self.has_value {
-            try!(self.write_all(b"\n"));
-            try!(self.indent(0))
-        }
-
+        self.offsets.pop();
         self.write_all(b"}")
     }
 
     fn begin_map_key(&mut self, first: bool) -> io::Result<()> {
-        if first {
+        if !first {
             try!(self.write_all(b"\n"));
-        } else {
-            try!(self.write_all(b",\n"));
+            try!(self.indent());
         }
 
-        try!(self.indent(0));
         Ok(())
     }
 
     fn begin_list(&mut self) -> io::Result<()> {
-        self.current_indent += 1;
+        try!(self.write_all(b"("));
         self.has_value = false;
-        self.write_all(b"(")
+        self.offsets.push(self.current_column);
+        Ok(())
     }
 
     fn end_list(&mut self) -> io::Result<()> {
-        self.current_indent -= 1;
-
-        if self.has_value {
-            try!(self.write_all(b"\n"));
-            try!(self.indent(0));
-        }
+        self.offsets.pop();
 
         self.write_all(b")")
     }
 
     fn begin_list_item(&mut self, first: bool) -> io::Result<()> {
-        if first {
+        if !first {
             try!(self.write_all(b"\n"));
-        } else {
-            try!(self.write_all(b",\n"));
+            try!(self.indent());
         }
 
-        try!(self.indent(0));
         Ok(())
     }
 
@@ -618,17 +610,19 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
 
     fn begin_set(&mut self) -> io::Result<()> {
         try!(self.write_all(b"#{"));
+        self.offsets.push(self.current_column);
         Ok(())
     }
 
     fn end_set(&mut self) -> io::Result<()> {
-        try!(self.write_all(b"}"));
-        Ok(())
+        self.offsets.pop();
+        self.write_all(b"}")
     }
 
     fn begin_set_item(&mut self, first: bool) -> io::Result<()> {
         if !first {
-            try!(self.write_all(b" "));
+            try!(self.write_all(b"\n"));
+            try!(self.indent());
         }
         Ok(())
     }
