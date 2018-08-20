@@ -70,8 +70,12 @@ trait EdnFormatter {
     fn write_integer(&mut self, value: i64) -> io::Result<()>;
     fn write_string(&mut self, value: String) -> io::Result<()>;
     fn write_keyword(&mut self, value: String) -> io::Result<()>;
-    fn write_vector(&mut self, value: Vec<EdnValue>) -> io::Result<()>;
     fn write_list(&mut self, value: Vec<EdnValue>) -> io::Result<()>;
+    fn write_vector(&mut self, value: Vec<EdnValue>) -> io::Result<()>;
+    fn write_map(&mut self, value: BTreeMap<EdnValue, EdnValue>) -> io::Result<()>;
+    fn write_set(&mut self, value: BTreeSet<EdnValue>) -> io::Result<()>;
+    fn write_tagged(&mut self, x: String, y: Box<EdnValue>) -> io::Result<()>;
+
     fn begin_vector(&mut self) -> io::Result<()>;
     fn end_vector(&mut self) -> io::Result<()>;
     fn begin_vector_item(&mut self, first: bool) -> io::Result<()>;
@@ -88,13 +92,10 @@ trait EdnFormatter {
     fn end_map_key(&mut self, _first: bool) -> io::Result<()>;
     fn begin_map_value(&mut self) -> io::Result<()>;
     fn end_map_value(&mut self) -> io::Result<()>;
-    fn write_map(&mut self, value: BTreeMap<EdnValue, EdnValue>) -> io::Result<()>;
     fn begin_set(&mut self) -> io::Result<()>;
     fn end_set(&mut self) -> io::Result<()>;
     fn begin_set_item(&mut self, first: bool) -> io::Result<()>;
     fn end_set_item(&mut self) -> io::Result<()>;
-    fn write_set(&mut self, value: BTreeSet<EdnValue>) -> io::Result<()>;
-    fn write_tagged(&mut self, x: String, y: Box<EdnValue>) -> io::Result<()>;
 
     fn write_form(&mut self, form: EdnValue) -> io::Result<()> {
         match form {
@@ -359,7 +360,6 @@ trait JsonFormatter {
     }*/
 }
 
-#[derive(Debug)]
 crate struct PrettyEdnFormatter<W: Write> {
     current_column: usize,
     offsets: Vec<usize>,
@@ -377,47 +377,42 @@ impl<W: Write> PrettyEdnFormatter<W> {
         }
     }
 
+    fn write(&mut self, s: ColoredString) -> io::Result<()> {
+        for mut c in s.chars() {
+            //println!("{:?}", '\u{001b}' as usize);
+            //println!("{:?}", c as usize);
+            match c {
+                '\n' => self.current_column = 0,
+                '\t' => {
+                    c = ' ';
+                    self.current_column += 1
+                }
+                '\u{001b}' => {}
+                _ if c.is_control() => {}
+                _ => self.current_column += 1,
+            }
+
+            try!(self.writer.write_all(c.encode_utf8(&mut [0; 4]).as_bytes()));
+        }
+
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+
     fn indent(&mut self) -> io::Result<()> {
         match self.offsets.last() {
             Some(&n) => {
                 for _ in 0..n {
-                    try!(write!(self, "{}", " "));
+                    try!(self.write(ColoredString::from(" ")));
                 }
             }
             None => {}
         };
 
         Ok(())
-    }
-}
-
-impl<W: Write> Write for PrettyEdnFormatter<W> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let s = str::from_utf8(bytes).unwrap();
-        let mut bytes_processed: usize = 0;
-
-        for c in s.chars() {
-            if c == '\n' {
-                //println!("column RESET");
-                self.current_column = 0;
-            } else {
-                self.current_column += 1;
-                //println!("column {}", self.current_column);
-            }
-
-            let mut buf = [0; 4];
-            let bytes = c.encode_utf8(&mut buf).as_bytes();
-
-            try!(self.writer.write_all(bytes));
-
-            bytes_processed += bytes.len();
-        }
-
-        Ok(bytes_processed)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.writer.flush()
     }
 }
 
@@ -428,53 +423,49 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
     }
 
     fn write_nil(&mut self) -> io::Result<()> {
-        write!(self, "{}", "nil".color(DEFAULT_THEME.nil))
+        self.write("nil".color(DEFAULT_THEME.nil))
     }
 
     fn write_boolean(&mut self, value: bool) -> io::Result<()> {
         let as_str = if value { "true" } else { "false" };
-        write!(self, "{}", as_str.color(DEFAULT_THEME.boolean))
+        self.write(as_str.color(DEFAULT_THEME.boolean))
     }
 
     fn write_char(&mut self, value: char) -> io::Result<()> {
-        try!(write!(self, "{}", "\\".color(DEFAULT_THEME.char)));
-        try!(write!(
-            self,
-            "{}",
-            value.encode_utf8(&mut [0; 4]).color(DEFAULT_THEME.char)
-        ));
+        try!(self.write("\\".color(DEFAULT_THEME.char)));
+        try!(self.write(value.encode_utf8(&mut [0; 4]).color(DEFAULT_THEME.char)));
         Ok(())
     }
 
     fn write_symbol(&mut self, value: String) -> io::Result<()> {
-        write!(self, "{}", value.color(DEFAULT_THEME.symbol))
+        self.write(value.color(DEFAULT_THEME.symbol))
     }
 
     fn write_float(&mut self, value: f64) -> io::Result<()> {
-        write!(self, "{}", value.to_string().color(DEFAULT_THEME.number))
+        self.write(value.to_string().color(DEFAULT_THEME.number))
     }
 
     fn write_integer(&mut self, value: i64) -> io::Result<()> {
-        write!(self, "{}", value.to_string().color(DEFAULT_THEME.number))
+        self.write(value.to_string().color(DEFAULT_THEME.number))
     }
 
     fn write_string(&mut self, value: String) -> io::Result<()> {
         try!(self.begin_string());
-        try!(write!(self, "{}", value.color(DEFAULT_THEME.string)));
+        try!(self.write(value.color(DEFAULT_THEME.string)));
         self.end_string()
     }
 
     fn begin_string(&mut self) -> io::Result<()> {
-        self.write_all(b"\"")
+        self.write(ColoredString::from("\""))
     }
 
     fn end_string(&mut self) -> io::Result<()> {
-        self.write_all(b"\"")
+        self.write(ColoredString::from("\""))
     }
 
     fn write_keyword(&mut self, value: String) -> io::Result<()> {
-        try!(write!(self, "{}", ":".color(DEFAULT_THEME.keyword)));
-        try!(write!(self, "{}", value.color(DEFAULT_THEME.keyword)));
+        try!(self.write(":".color(DEFAULT_THEME.keyword)));
+        try!(self.write(value.color(DEFAULT_THEME.keyword)));
         Ok(())
     }
 
@@ -505,7 +496,7 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
     }
 
     fn begin_vector(&mut self) -> io::Result<()> {
-        try!(self.write_all(b"["));
+        try!(self.write(ColoredString::from("[")));
 
         self.has_value = false;
         self.offsets.push(self.current_column);
@@ -515,12 +506,12 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
 
     fn end_vector(&mut self) -> io::Result<()> {
         self.offsets.pop();
-        self.write_all(b"]")
+        self.write(ColoredString::from("]"))
     }
 
     fn begin_vector_item(&mut self, first: bool) -> io::Result<()> {
         if !first {
-            try!(self.write_all(b"\n"));
+            try!(self.write(ColoredString::from("\n")));
             try!(self.indent());
         }
 
@@ -533,7 +524,7 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
     }
 
     fn begin_map(&mut self) -> io::Result<()> {
-        try!(self.write_all(b"{"));
+        try!(self.write(ColoredString::from("{")));
         self.offsets.push(self.current_column);
         self.has_value = false;
         Ok(())
@@ -541,12 +532,12 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
 
     fn end_map(&mut self) -> io::Result<()> {
         self.offsets.pop();
-        self.write_all(b"}")
+        self.write(ColoredString::from("}"))
     }
 
     fn begin_map_key(&mut self, first: bool) -> io::Result<()> {
         if !first {
-            try!(self.write_all(b"\n"));
+            try!(self.write(ColoredString::from("\n")));
             try!(self.indent());
         }
 
@@ -554,7 +545,7 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
     }
 
     fn begin_list(&mut self) -> io::Result<()> {
-        try!(self.write_all(b"("));
+        try!(self.write(ColoredString::from("(")));
         self.has_value = false;
         self.offsets.push(self.current_column);
         Ok(())
@@ -563,12 +554,12 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
     fn end_list(&mut self) -> io::Result<()> {
         self.offsets.pop();
 
-        self.write_all(b")")
+        self.write(ColoredString::from(")"))
     }
 
     fn begin_list_item(&mut self, first: bool) -> io::Result<()> {
         if !first {
-            try!(self.write_all(b"\n"));
+            try!(self.write(ColoredString::from("\n")));
             try!(self.indent());
         }
 
@@ -585,8 +576,7 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
     }
 
     fn begin_map_value(&mut self) -> io::Result<()> {
-        try!(self.write_all(b" "));
-        Ok(())
+        self.write(ColoredString::from(" "))
     }
 
     fn end_map_value(&mut self) -> io::Result<()> {
@@ -609,19 +599,19 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
     }
 
     fn begin_set(&mut self) -> io::Result<()> {
-        try!(self.write_all(b"#{"));
+        try!(self.write(ColoredString::from("#{")));
         self.offsets.push(self.current_column);
         Ok(())
     }
 
     fn end_set(&mut self) -> io::Result<()> {
         self.offsets.pop();
-        self.write_all(b"}")
+        self.write(ColoredString::from("}"))
     }
 
     fn begin_set_item(&mut self, first: bool) -> io::Result<()> {
         if !first {
-            try!(self.write_all(b"\n"));
+        try!(self.write(ColoredString::from("\n")));
             try!(self.indent());
         }
         Ok(())
@@ -643,9 +633,9 @@ impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
     }
 
     fn write_tagged(&mut self, x: String, y: Box<EdnValue>) -> io::Result<()> {
-        try!(write!(self, "{}", "#".color(DEFAULT_THEME.tag)));
-        try!(write!(self, "{}", x.color(DEFAULT_THEME.tag)));
-        try!(write!(self, "{}", " ".color(DEFAULT_THEME.tag)));
+        try!(self.write("#".color(DEFAULT_THEME.tag)));
+        try!(self.write(x.color(DEFAULT_THEME.tag)));
+        try!(self.write(" ".color(DEFAULT_THEME.tag)));
         try!(self.write_form(*y));
 
         Ok(())
