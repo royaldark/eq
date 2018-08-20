@@ -26,7 +26,7 @@ fn main() {
         Ok(p) => output::format_output(p, &opts.output).expect("Failed to write output."),
         Err(ae) => match ae {
             ApplicationError::Read(w) => println!("FATAL: {:?}", w),
-            ApplicationError::Operation(o) => (),
+            ApplicationError::Operation(_o) => (),
         },
     }
 }

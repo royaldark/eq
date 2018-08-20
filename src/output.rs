@@ -1,6 +1,8 @@
 use colored::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
+use std::io::Write;
+use std::str;
 
 use clap::{_clap_count_exprs, arg_enum};
 use edn::Value as EdnValue;
@@ -42,6 +44,7 @@ crate struct ColorTheme {
     symbol: Color,
     vector: Color,
     list: Color,
+    map: Color,
 }
 
 static DEFAULT_THEME: ColorTheme = ColorTheme {
@@ -55,378 +58,631 @@ static DEFAULT_THEME: ColorTheme = ColorTheme {
     tag: Color::BrightGreen,
     vector: Color::BrightYellow,
     list: Color::BrightYellow,
+    map: Color::White,
 };
 
 trait EdnFormatter {
-    fn write_nil<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        write!(writer, "{}", "nil".color(DEFAULT_THEME.nil))
+    fn write_nil(&mut self) -> io::Result<()>;
+    fn write_boolean(&mut self, value: bool) -> io::Result<()>;
+    fn write_char(&mut self, value: char) -> io::Result<()>;
+    fn write_symbol(&mut self, value: String) -> io::Result<()>;
+    fn write_float(&mut self, value: f64) -> io::Result<()>;
+    fn write_integer(&mut self, value: i64) -> io::Result<()>;
+    fn write_string(&mut self, value: String) -> io::Result<()>;
+    fn write_keyword(&mut self, value: String) -> io::Result<()>;
+    fn write_vector(&mut self, value: Vec<EdnValue>) -> io::Result<()>;
+    fn write_list(&mut self, value: Vec<EdnValue>) -> io::Result<()>;
+    fn begin_vector(&mut self) -> io::Result<()>;
+    fn end_vector(&mut self) -> io::Result<()>;
+    fn begin_vector_item(&mut self, first: bool) -> io::Result<()>;
+    fn end_vector_item(&mut self) -> io::Result<()>;
+    fn begin_list(&mut self) -> io::Result<()>;
+    fn end_list(&mut self) -> io::Result<()>;
+    fn begin_list_item(&mut self, first: bool) -> io::Result<()>;
+    fn end_list_item(&mut self) -> io::Result<()>;
+    fn begin_string(&mut self) -> io::Result<()>;
+    fn end_string(&mut self) -> io::Result<()>;
+    fn begin_map(&mut self) -> io::Result<()>;
+    fn end_map(&mut self) -> io::Result<()>;
+    fn begin_map_key(&mut self, first: bool) -> io::Result<()>;
+    fn end_map_key(&mut self, _first: bool) -> io::Result<()>;
+    fn begin_map_value(&mut self) -> io::Result<()>;
+    fn end_map_value(&mut self) -> io::Result<()>;
+    fn write_map(&mut self, value: BTreeMap<EdnValue, EdnValue>) -> io::Result<()>;
+    fn begin_set(&mut self) -> io::Result<()>;
+    fn end_set(&mut self) -> io::Result<()>;
+    fn begin_set_item(&mut self, first: bool) -> io::Result<()>;
+    fn end_set_item(&mut self) -> io::Result<()>;
+    fn write_set(&mut self, value: BTreeSet<EdnValue>) -> io::Result<()>;
+    fn write_tagged(&mut self, x: String, y: Box<EdnValue>) -> io::Result<()>;
+
+    fn write_form(&mut self, form: EdnValue) -> io::Result<()> {
+        match form {
+            EdnValue::Nil => self.write_nil(),
+            EdnValue::Boolean(b) => self.write_boolean(b),
+            EdnValue::String(s) => self.write_string(s),
+            EdnValue::Char(c) => self.write_char(c),
+            EdnValue::Symbol(s) => self.write_symbol(s),
+            EdnValue::Keyword(k) => self.write_keyword(k),
+            EdnValue::Integer(i) => self.write_integer(i),
+            EdnValue::Float(f) => self.write_float(f.into()),
+            EdnValue::List(l) => self.write_list(l),
+            EdnValue::Vector(v) => self.write_vector(v),
+            EdnValue::Map(m) => self.write_map(m),
+            EdnValue::Set(s) => self.write_set(s),
+            EdnValue::Tagged(x, y) => self.write_tagged(x, y),
+        }
     }
 
-    fn write_boolean<W: io::Write>(&mut self, writer: &mut W, value: bool) -> io::Result<()> {
+    fn reset(&mut self) {
+        ()
+    }
+
+    fn write_forms(&mut self, forms: Vec<EdnValue>) -> io::Result<()> {
+        for form in forms {
+            try!(self.write_form(form));
+            self.reset();
+        }
+
+        Ok(())
+    }
+}
+
+struct CompactEdnFormatter<W> {
+    writer: W,
+}
+
+impl<W: Write> CompactEdnFormatter<W> {
+    fn new(writer: W) -> CompactEdnFormatter<W> {
+        CompactEdnFormatter { writer }
+    }
+}
+
+impl<W: Write> Write for CompactEdnFormatter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.writer.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+impl<W: Write> EdnFormatter for CompactEdnFormatter<W> {
+    fn write_nil(&mut self) -> io::Result<()> {
+        write!(self, "{}", "nil".color(DEFAULT_THEME.nil))
+    }
+
+    fn write_boolean(&mut self, value: bool) -> io::Result<()> {
         let as_str = if value { "true" } else { "false" };
-        write!(writer, "{}", as_str.color(DEFAULT_THEME.boolean))
+        write!(self, "{}", as_str.color(DEFAULT_THEME.boolean))
     }
 
-    fn write_char<W: io::Write>(&mut self, writer: &mut W, value: char) -> io::Result<()> {
-        try!(write!(writer, "{}", "\\".color(DEFAULT_THEME.char)));
+    fn write_char(&mut self, value: char) -> io::Result<()> {
+        try!(write!(self, "{}", "\\".color(DEFAULT_THEME.char)));
         try!(write!(
-            writer,
+            self.writer,
             "{}",
             value.encode_utf8(&mut [0; 4]).color(DEFAULT_THEME.char)
         ));
         Ok(())
     }
 
-    fn write_symbol<W: io::Write>(&mut self, writer: &mut W, value: String) -> io::Result<()> {
-        write!(writer, "{}", value.color(DEFAULT_THEME.symbol))
+    fn write_symbol(&mut self, value: String) -> io::Result<()> {
+        write!(self, "{}", value.color(DEFAULT_THEME.symbol))
     }
 
-    fn write_float<W: io::Write>(&mut self, writer: &mut W, value: f64) -> io::Result<()> {
-        write!(writer, "{}", value.to_string().color(DEFAULT_THEME.number))
+    fn write_float(&mut self, value: f64) -> io::Result<()> {
+        write!(self, "{}", value.to_string().color(DEFAULT_THEME.number))
     }
 
-    fn write_integer<W: io::Write>(&mut self, writer: &mut W, value: i64) -> io::Result<()> {
-        write!(writer, "{}", value.to_string().color(DEFAULT_THEME.number))
+    fn write_integer(&mut self, value: i64) -> io::Result<()> {
+        write!(self, "{}", value.to_string().color(DEFAULT_THEME.number))
     }
 
-    fn write_string<W: io::Write>(&mut self, writer: &mut W, value: String) -> io::Result<()> {
-        try!(self.begin_string(writer));
-        try!(write!(writer, "{}", value.color(DEFAULT_THEME.string)));
-        self.end_string(writer)
+    fn write_string(&mut self, value: String) -> io::Result<()> {
+        try!(self.begin_string());
+        try!(write!(self, "{}", value.color(DEFAULT_THEME.string)));
+        self.end_string()
     }
 
-    fn write_keyword<W: io::Write>(&mut self, writer: &mut W, value: String) -> io::Result<()> {
-        try!(write!(writer, "{}", ":".color(DEFAULT_THEME.keyword)));
-        try!(write!(writer, "{}", value.color(DEFAULT_THEME.keyword)));
+    fn write_keyword(&mut self, value: String) -> io::Result<()> {
+        try!(write!(self, "{}", ":".color(DEFAULT_THEME.keyword)));
+        try!(write!(self, "{}", value.color(DEFAULT_THEME.keyword)));
         Ok(())
     }
 
-    fn write_vector<W: io::Write>(
-        &mut self,
-        writer: &mut W,
-        value: Vec<EdnValue>,
-    ) -> io::Result<()> {
-        try!(self.begin_vector(writer));
+    fn write_vector(&mut self, value: Vec<EdnValue>) -> io::Result<()> {
+        try!(self.begin_vector());
 
         for (idx, item) in value.into_iter().enumerate() {
-            try!(self.begin_vector_item(writer, idx == 0));
-            try!(self.write_form(writer, item));
-            try!(self.end_vector_item(writer));
+            try!(self.begin_vector_item(idx == 0));
+            try!(self.write_form(item));
+            try!(self.end_vector_item());
         }
 
-        try!(self.end_vector(writer));
+        try!(self.end_vector());
         Ok(())
     }
 
-    fn write_list<W: io::Write>(&mut self, writer: &mut W, value: Vec<EdnValue>) -> io::Result<()> {
-        try!(self.begin_list(writer));
+    fn write_list(&mut self, value: Vec<EdnValue>) -> io::Result<()> {
+        try!(self.begin_list());
 
         for (idx, item) in value.into_iter().enumerate() {
-            try!(self.begin_list_item(writer, idx == 0));
-            try!(self.write_form(writer, item));
-            try!(self.end_list_item(writer));
+            try!(self.begin_list_item(idx == 0));
+            try!(self.write_form(item));
+            try!(self.end_list_item());
         }
 
-        try!(self.end_list(writer));
+        try!(self.end_list());
         Ok(())
     }
 
-    fn begin_vector<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        write!(writer, "{}", "[".color(DEFAULT_THEME.vector))
+    fn begin_vector(&mut self) -> io::Result<()> {
+        write!(self, "{}", "[".color(DEFAULT_THEME.vector))
     }
 
-    fn end_vector<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        write!(writer, "{}", "]".color(DEFAULT_THEME.vector))
+    fn end_vector(&mut self) -> io::Result<()> {
+        write!(self, "{}", "]".color(DEFAULT_THEME.vector))
     }
 
-    fn begin_vector_item<W: io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
+    fn begin_vector_item(&mut self, first: bool) -> io::Result<()> {
         if !first {
-            try!(writer.write_all(b" "));
+            try!(self.writer.write_all(b" "));
         }
         Ok(())
     }
 
-    fn end_vector_item<W: io::Write>(&mut self, _writer: &mut W) -> io::Result<()> {
+    fn end_vector_item(&mut self) -> io::Result<()> {
         Ok(())
     }
 
-    fn begin_list<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        write!(writer, "{}", "(".color(DEFAULT_THEME.list))
+    fn begin_list(&mut self) -> io::Result<()> {
+        write!(self, "{}", "(".color(DEFAULT_THEME.list))
     }
 
-    fn end_list<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        write!(writer, "{}", ")".color(DEFAULT_THEME.list))
+    fn end_list(&mut self) -> io::Result<()> {
+        write!(self, "{}", ")".color(DEFAULT_THEME.list))
     }
 
-    fn begin_list_item<W: io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
+    fn begin_list_item(&mut self, first: bool) -> io::Result<()> {
         if !first {
-            try!(writer.write_all(b" "));
+            try!(self.writer.write_all(b" "));
         }
         Ok(())
     }
 
-    fn end_list_item<W: io::Write>(&mut self, _writer: &mut W) -> io::Result<()> {
+    fn end_list_item(&mut self) -> io::Result<()> {
         Ok(())
     }
 
-    fn begin_string<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b"\"")
+    fn begin_string(&mut self) -> io::Result<()> {
+        self.writer.write_all(b"\"")
     }
 
-    fn end_string<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b"\"")
+    fn end_string(&mut self) -> io::Result<()> {
+        self.writer.write_all(b"\"")
     }
 
-    fn begin_map<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b"{")
+    fn begin_map(&mut self) -> io::Result<()> {
+        self.writer.write_all(b"{")
     }
 
-    fn end_map<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b"}")
+    fn end_map(&mut self) -> io::Result<()> {
+        self.writer.write_all(b"}")
     }
 
-    fn begin_map_key<W: io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
+    fn begin_map_key(&mut self, first: bool) -> io::Result<()> {
         if !first {
-            try!(writer.write_all(b" "));
+            try!(self.writer.write_all(b" "));
         }
         Ok(())
     }
 
-    fn end_map_key<W: io::Write>(&mut self, writer: &mut W, _first: bool) -> io::Result<()> {
+    fn end_map_key(&mut self, _first: bool) -> io::Result<()> {
         Ok(())
     }
 
-    fn begin_map_value<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        try!(writer.write_all(b" "));
+    fn begin_map_value(&mut self) -> io::Result<()> {
+        try!(self.writer.write_all(b" "));
         Ok(())
     }
 
-    fn end_map_value<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+    fn end_map_value(&mut self) -> io::Result<()> {
         Ok(())
     }
 
-    fn write_map<W: io::Write>(
-        &mut self,
-        writer: &mut W,
-        value: BTreeMap<EdnValue, EdnValue>,
-    ) -> io::Result<()> {
-        try!(self.begin_map(writer));
+    fn write_map(&mut self, value: BTreeMap<EdnValue, EdnValue>) -> io::Result<()> {
+        try!(self.begin_map());
         for (idx, (k, v)) in value.into_iter().enumerate() {
-            try!(self.begin_map_key(writer, idx == 0));
-            try!(self.write_form(writer, k));
-            try!(self.end_map_key(writer, idx == 0));
+            try!(self.begin_map_key(idx == 0));
+            try!(self.write_form(k));
+            try!(self.end_map_key(idx == 0));
 
-            try!(self.begin_map_value(writer));
-            try!(self.write_form(writer, v));
-            try!(self.end_map_value(writer));
+            try!(self.begin_map_value());
+            try!(self.write_form(v));
+            try!(self.end_map_value());
         }
-        try!(self.end_map(writer));
+        try!(self.end_map());
         Ok(())
     }
 
-    fn begin_set<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        try!(writer.write_all(b"#{"));
+    fn begin_set(&mut self) -> io::Result<()> {
+        try!(self.writer.write_all(b"#{"));
         Ok(())
     }
 
-    fn end_set<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        try!(writer.write_all(b"}"));
+    fn end_set(&mut self) -> io::Result<()> {
+        try!(self.writer.write_all(b"}"));
         Ok(())
     }
 
-    fn begin_set_item<W: io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
+    fn begin_set_item(&mut self, first: bool) -> io::Result<()> {
         if !first {
-            try!(writer.write_all(b" "));
+            try!(self.writer.write_all(b" "));
         }
         Ok(())
     }
 
-    fn end_set_item<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+    fn end_set_item(&mut self) -> io::Result<()> {
         Ok(())
     }
 
-    fn write_set<W: io::Write>(
-        &mut self,
-        writer: &mut W,
-        value: BTreeSet<EdnValue>,
-    ) -> io::Result<()> {
-        try!(self.begin_set(writer));
+    fn write_set(&mut self, value: BTreeSet<EdnValue>) -> io::Result<()> {
+        try!(self.begin_set());
         for (idx, item) in value.into_iter().enumerate() {
-            try!(self.begin_set_item(writer, idx == 0));
-            try!(self.write_form(writer, item));
-            try!(self.end_set_item(writer));
+            try!(self.begin_set_item(idx == 0));
+            try!(self.write_form(item));
+            try!(self.end_set_item());
         }
-        try!(self.end_set(writer));
+        try!(self.end_set());
         Ok(())
     }
 
-    fn write_tagged<W: io::Write>(
-        &mut self,
-        writer: &mut W,
-        x: String,
-        y: Box<EdnValue>,
-    ) -> io::Result<()> {
-        try!(write!(writer, "{}", "#".color(DEFAULT_THEME.tag)));
-        try!(write!(writer, "{}", x.color(DEFAULT_THEME.tag)));
-        try!(write!(writer, "{}", " ".color(DEFAULT_THEME.tag)));
-        try!(self.write_form(writer, *y));
+    fn write_tagged(&mut self, x: String, y: Box<EdnValue>) -> io::Result<()> {
+        try!(write!(self, "{}", "#".color(DEFAULT_THEME.tag)));
+        try!(write!(self, "{}", x.color(DEFAULT_THEME.tag)));
+        try!(write!(self, "{}", " ".color(DEFAULT_THEME.tag)));
+        try!(self.write_form(*y));
 
         Ok(())
-    }
-
-    fn write_form<W: io::Write>(&mut self, writer: &mut W, form: EdnValue) -> io::Result<()> {
-        match form {
-            EdnValue::Nil => self.write_nil(writer),
-            EdnValue::Boolean(b) => self.write_boolean(writer, b),
-            EdnValue::String(s) => self.write_string(writer, s),
-            EdnValue::Char(c) => self.write_char(writer, c),
-            EdnValue::Symbol(s) => self.write_symbol(writer, s),
-            EdnValue::Keyword(k) => self.write_keyword(writer, k),
-            EdnValue::Integer(i) => self.write_integer(writer, i),
-            EdnValue::Float(f) => self.write_float(writer, f.into()),
-            EdnValue::List(l) => self.write_list(writer, l),
-            EdnValue::Vector(v) => self.write_vector(writer, v),
-            EdnValue::Map(m) => self.write_map(writer, m),
-            EdnValue::Set(s) => self.write_set(writer, s),
-            EdnValue::Tagged(x, y) => self.write_tagged(writer, x, y),
-        }
     }
 }
 
 trait JsonFormatter {
-    fn write_null<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        write!(writer, "{}", "nil".color(DEFAULT_THEME.nil))
+    /*fn write_null(&mut self) -> io::Result<()> {
+        write!(self, "{}", "nil".color(DEFAULT_THEME.nil))
     }
 
-    fn write_undefined<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        write!(writer, "{}", "nil".color(DEFAULT_THEME.nil))
-    }
+    fn write_undefined(&mut self) -> io::Result<()> {
+        write!(self, "{}", "nil".color(DEFAULT_THEME.nil))
+    }*/
 }
-
-crate struct CompactEdnFormatter {}
-
-impl EdnFormatter for CompactEdnFormatter {}
 
 #[derive(Debug)]
-crate struct PrettyEdnFormatter {
+crate struct PrettyEdnFormatter<W: Write> {
+    current_column: usize,
     current_indent: usize,
     has_value: bool,
-    indent: String,
+    writer: W,
 }
 
-impl PrettyEdnFormatter {
-    fn new(indent: String) -> Self {
+impl<W: Write> PrettyEdnFormatter<W> {
+    fn new(writer: W) -> Self {
         PrettyEdnFormatter {
+            current_column: 0,
             current_indent: 0,
             has_value: false,
-            indent,
+            writer,
         }
+    }
+
+    fn indent(&mut self, n: usize) -> io::Result<()> {
+        for _ in 0..n {
+            //let indent = self.indent.clone();
+            try!(write!(self, "{}", " "));
+        }
+
+        Ok(())
     }
 }
 
-fn indent<W: io::Write>(writer: &mut W, n: usize, s: &[u8]) -> io::Result<()> {
-    for _ in 0..n {
-        try!(writer.write_all(s));
+impl<W: Write> Write for PrettyEdnFormatter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let s = str::from_utf8(bytes).unwrap();
+        let mut bytes_processed: usize = 0;
+
+        for c in s.chars() {
+            if c == '\n' {
+                println!("column RESET");
+                self.current_column = 0;
+            } else {
+                self.current_column += 1;
+                //println!("column {}", self.current_column);
+            }
+
+            let mut buf = [0; 4];
+            let bytes = c.encode_utf8(&mut buf).as_bytes();
+
+            try!(self.writer.write_all(bytes));
+
+            bytes_processed += bytes.len();
+        }
+
+        Ok(bytes_processed)
     }
 
-    Ok(())
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
 }
 
-impl EdnFormatter for PrettyEdnFormatter {
-    fn begin_vector<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        self.current_indent += 1;
-        self.has_value = false;
-        writer.write_all(b"[")
+impl<W: Write> EdnFormatter for PrettyEdnFormatter<W> {
+    fn reset(&mut self) {
+        self.current_column = 0;
+        self.current_indent = 0;
     }
 
-    fn end_vector<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        self.current_indent -= 1;
-
-        if self.has_value {
-            try!(writer.write_all(b"\n"));
-            try!(indent(writer, self.current_indent, self.indent.as_ref()));
-        }
-
-        writer.write_all(b"]")
+    fn write_nil(&mut self) -> io::Result<()> {
+        write!(self, "{}", "nil".color(DEFAULT_THEME.nil))
     }
 
-    fn begin_vector_item<W: io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
-        if first {
-            try!(writer.write_all(b"\n"));
-        } else {
-            try!(writer.write_all(b"\n,"));
-        }
+    fn write_boolean(&mut self, value: bool) -> io::Result<()> {
+        let as_str = if value { "true" } else { "false" };
+        write!(self, "{}", as_str.color(DEFAULT_THEME.boolean))
+    }
 
-        try!(indent(writer, self.current_indent, self.indent.as_ref()));
+    fn write_char(&mut self, value: char) -> io::Result<()> {
+        try!(write!(self, "{}", "\\".color(DEFAULT_THEME.char)));
+        try!(write!(
+            self,
+            "{}",
+            value.encode_utf8(&mut [0; 4]).color(DEFAULT_THEME.char)
+        ));
         Ok(())
     }
 
-    fn end_vector_item<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+    fn write_symbol(&mut self, value: String) -> io::Result<()> {
+        write!(self, "{}", value.color(DEFAULT_THEME.symbol))
+    }
+
+    fn write_float(&mut self, value: f64) -> io::Result<()> {
+        write!(self, "{}", value.to_string().color(DEFAULT_THEME.number))
+    }
+
+    fn write_integer(&mut self, value: i64) -> io::Result<()> {
+        write!(self, "{}", value.to_string().color(DEFAULT_THEME.number))
+    }
+
+    fn write_string(&mut self, value: String) -> io::Result<()> {
+        try!(self.begin_string());
+        try!(write!(self, "{}", value.color(DEFAULT_THEME.string)));
+        self.end_string()
+    }
+
+    fn begin_string(&mut self) -> io::Result<()> {
+        self.write_all(b"\"")
+    }
+
+    fn end_string(&mut self) -> io::Result<()> {
+        self.write_all(b"\"")
+    }
+
+    fn write_keyword(&mut self, value: String) -> io::Result<()> {
+        try!(write!(self, "{}", ":".color(DEFAULT_THEME.keyword)));
+        try!(write!(self, "{}", value.color(DEFAULT_THEME.keyword)));
+        Ok(())
+    }
+
+    fn write_vector(&mut self, value: Vec<EdnValue>) -> io::Result<()> {
+        try!(self.begin_vector());
+
+        for (idx, item) in value.into_iter().enumerate() {
+            try!(self.begin_vector_item(idx == 0));
+            try!(self.write_form(item));
+            try!(self.end_vector_item());
+        }
+
+        try!(self.end_vector());
+        Ok(())
+    }
+
+    fn write_list(&mut self, value: Vec<EdnValue>) -> io::Result<()> {
+        try!(self.begin_list());
+
+        for (idx, item) in value.into_iter().enumerate() {
+            try!(self.begin_list_item(idx == 0));
+            try!(self.write_form(item));
+            try!(self.end_list_item());
+        }
+
+        try!(self.end_list());
+        Ok(())
+    }
+
+    fn begin_vector(&mut self) -> io::Result<()> {
+        self.current_indent += 1;
+        self.has_value = false;
+        self.write_all(b"[")
+    }
+
+    fn end_vector(&mut self) -> io::Result<()> {
+        self.current_indent -= 1;
+
+        self.write_all(b"]")
+    }
+
+    fn begin_vector_item(&mut self, first: bool) -> io::Result<()> {
+        if !first {
+            let offset = self.current_column;
+            try!(self.write_all(b"\n"));
+            try!(self.indent(offset));
+        }
+
+        Ok(())
+    }
+
+    fn end_vector_item(&mut self) -> io::Result<()> {
         self.has_value = true;
         Ok(())
     }
 
-    fn begin_list<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+    fn begin_map(&mut self) -> io::Result<()> {
         self.current_indent += 1;
         self.has_value = false;
-        writer.write_all(b"(")
+        self.write_all(b"{")
     }
 
-    fn end_list<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+    fn end_map(&mut self) -> io::Result<()> {
         self.current_indent -= 1;
 
         if self.has_value {
-            try!(writer.write_all(b"\n"));
-            try!(indent(writer, self.current_indent, self.indent.as_ref()));
+            try!(self.write_all(b"\n"));
+            try!(self.indent(0))
         }
 
-        writer.write_all(b")")
+        self.write_all(b"}")
     }
 
-    fn begin_list_item<W: io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
+    fn begin_map_key(&mut self, first: bool) -> io::Result<()> {
         if first {
-            try!(writer.write_all(b"\n"));
+            try!(self.write_all(b"\n"));
         } else {
-            try!(writer.write_all(b"\n,"));
+            try!(self.write_all(b",\n"));
         }
 
-        try!(indent(writer, self.current_indent, self.indent.as_ref()));
+        try!(self.indent(0));
         Ok(())
     }
 
-    fn end_list_item<W: io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+    fn begin_list(&mut self) -> io::Result<()> {
+        self.current_indent += 1;
+        self.has_value = false;
+        self.write_all(b"(")
+    }
+
+    fn end_list(&mut self) -> io::Result<()> {
+        self.current_indent -= 1;
+
+        if self.has_value {
+            try!(self.write_all(b"\n"));
+            try!(self.indent(0));
+        }
+
+        self.write_all(b")")
+    }
+
+    fn begin_list_item(&mut self, first: bool) -> io::Result<()> {
+        if first {
+            try!(self.write_all(b"\n"));
+        } else {
+            try!(self.write_all(b",\n"));
+        }
+
+        try!(self.indent(0));
+        Ok(())
+    }
+
+    fn end_list_item(&mut self) -> io::Result<()> {
         self.has_value = true;
+        Ok(())
+    }
+
+    fn end_map_key(&mut self, _first: bool) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn begin_map_value(&mut self) -> io::Result<()> {
+        try!(self.write_all(b" "));
+        Ok(())
+    }
+
+    fn end_map_value(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn write_map(&mut self, value: BTreeMap<EdnValue, EdnValue>) -> io::Result<()> {
+        try!(self.begin_map());
+        for (idx, (k, v)) in value.into_iter().enumerate() {
+            try!(self.begin_map_key(idx == 0));
+            try!(self.write_form(k));
+            try!(self.end_map_key(idx == 0));
+
+            try!(self.begin_map_value());
+            try!(self.write_form(v));
+            try!(self.end_map_value());
+        }
+        try!(self.end_map());
+        Ok(())
+    }
+
+    fn begin_set(&mut self) -> io::Result<()> {
+        try!(self.write_all(b"#{"));
+        Ok(())
+    }
+
+    fn end_set(&mut self) -> io::Result<()> {
+        try!(self.write_all(b"}"));
+        Ok(())
+    }
+
+    fn begin_set_item(&mut self, first: bool) -> io::Result<()> {
+        if !first {
+            try!(self.write_all(b" "));
+        }
+        Ok(())
+    }
+
+    fn end_set_item(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn write_set(&mut self, value: BTreeSet<EdnValue>) -> io::Result<()> {
+        try!(self.begin_set());
+        for (idx, item) in value.into_iter().enumerate() {
+            try!(self.begin_set_item(idx == 0));
+            try!(self.write_form(item));
+            try!(self.end_set_item());
+        }
+        try!(self.end_set());
+        Ok(())
+    }
+
+    fn write_tagged(&mut self, x: String, y: Box<EdnValue>) -> io::Result<()> {
+        try!(write!(self, "{}", "#".color(DEFAULT_THEME.tag)));
+        try!(write!(self, "{}", x.color(DEFAULT_THEME.tag)));
+        try!(write!(self, "{}", " ".color(DEFAULT_THEME.tag)));
+        try!(self.write_form(*y));
+
         Ok(())
     }
 }
 
 crate fn format_output(forms: Vec<EdnValue>, opts: &OutputOptions) -> io::Result<()> {
-    let mut writer = match &opts.destination {
+    let writer = match &opts.destination {
         OutputDestination::Stdout => io::stdout(),
         OutputDestination::File(_path) => io::stdout(),
     };
 
-    for form in forms {
-        match (&opts.format, &opts.style) {
-            (OutputFormat::EDN, OutputStyle::Compact) => {
-                try!((CompactEdnFormatter {}).write_form(&mut writer, form))
-            }
-            (OutputFormat::EDN, OutputStyle::Pretty) => {
-                try!(PrettyEdnFormatter::new("  ".into()).write_form(&mut writer, form))
-            }
-            (OutputFormat::JSON, OutputStyle::Compact) => {
-                try!((CompactEdnFormatter {}).write_form(&mut writer, form))
-            }
-            (OutputFormat::JSON, OutputStyle::Pretty) => {
-                try!(PrettyEdnFormatter::new("  ".into()).write_form(&mut writer, form))
-            }
-        };
-    }
+    match (&opts.format, &opts.style) {
+        (OutputFormat::EDN, OutputStyle::Compact) => {
+            try!(CompactEdnFormatter::new(writer).write_forms(forms))
+        }
+        (OutputFormat::EDN, OutputStyle::Pretty) => {
+            try!(PrettyEdnFormatter::new(writer).write_forms(forms))
+        }
+        (OutputFormat::JSON, OutputStyle::Compact) => {
+            try!(CompactEdnFormatter::new(writer).write_forms(forms))
+        }
+        (OutputFormat::JSON, OutputStyle::Pretty) => {
+            try!(PrettyEdnFormatter::new(writer).write_forms(forms))
+        }
+    };
 
     Ok(())
 }
 
-#[cfg(test)]
+/* #[cfg(test)]
 mod format_tests {
     use super::*;
     use std::collections::BTreeSet;
@@ -528,4 +784,4 @@ mod format_tests {
             "#{true}"
         );
     }
-}
+} */
